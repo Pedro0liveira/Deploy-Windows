@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  TEMPLATE SEGURO. Antes de usar, substitua todos os valores __EDITAR_ANTES_DE_USAR__
+  pela combinação validada para esta ISO (edição, idioma, disco e partições).
+  Não use este arquivo sem teste em VM: particionamento e índice da imagem variam por ISO.
+-->
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+  <settings pass="windowsPE">
+    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <SetupUILanguage><UILanguage>pt-BR</UILanguage></SetupUILanguage>
+      <InputLocale>pt-BR</InputLocale>
+      <SystemLocale>pt-BR</SystemLocale>
+      <UILanguage>pt-BR</UILanguage>
+      <UserLocale>pt-BR</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <!-- Inserir aqui DiskConfiguration e ImageInstall específicos da ISO após teste em VM. -->
+      <UserData>
+        <AcceptEula>true</AcceptEula>
+        <FullName>__EDITAR_ANTES_DE_USAR_NOME_ORGANIZACAO__ - Paschoalotto</FullName>
+        <Organization>__EDITAR_ANTES_DE_USAR_ORGANIZACAO__ - senha login Paschoalotto</Organization>
+      </UserData>
+      <RunSynchronous>
+        <!-- O destino C: deve existir após a configuração de disco/imagem acima. -->
+        <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>90</Order>
+          <Path>cmd /c if exist X:\Deploy\NUL (mkdir C:\Deploy 2&gt;nul &amp; xcopy X:\Deploy C:\Deploy /e /i /h /y) else (echo ERRO: X:\Deploy ausente &amp; exit /b 1)</Path>
+          <Description>Copiar payload injetado pelo Ventoy para o disco instalado</Description>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
+  </settings>
+  <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <OOBE>
+        <HideEULAPage>true</HideEULAPage>
+        <ProtectYourPC>3</ProtectYourPC>
+      </OOBE>
+      <!-- Não cria nem recria usuários locais: a ISO continua responsável por isso. -->
+      <FirstLogonCommands>
+        <SynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>1</Order>
+          <CommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Deploy\Deploy.ps1</CommandLine>
+          <Description>Iniciar deploy em sessão interativa</Description>
+        </SynchronousCommand>
+      </FirstLogonCommands>
+    </component>
+  </settings>
+</unattend>

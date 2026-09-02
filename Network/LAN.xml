@@ -1,0 +1,11 @@
+<!--
+  BLOQUEIO INTENCIONAL: este não é um perfil 802.1X funcional.
+  Exporte o perfil autorizado da máquina de referência e substitua este arquivo:
+    netsh lan export profile folder="C:\Temp\LAN-export" interface="Ethernet"
+  Renomeie o XML exportado para LAN.xml e confirme no config.json:
+  - rede.interface
+  - rede.authMode (machineOrUser)
+  - rede.ssoMode (preLogon)
+  Não crie manualmente um perfil PEAP com certificados/servidores presumidos.
+-->
+<!-- EXPORTAR_PERFIL_REAL -->

@@ -1,0 +1,14 @@
+{
+  "auto_install": [
+    {
+      "parent": "/ISO",
+      "template": "/ventoy/deploy/autounattend.xml"
+    }
+  ],
+  "injection": [
+    {
+      "parent": "/ISO",
+      "archive": "/ventoy/deploy/deploy-payload.7z"
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "deployment": {
+    "mode": "validation",
+    "pauseAtCheckpoints": true,
+    "stateFile": "C:\\ProgramData\\Deploy\\state.json"
+  },
+  "empresa": {
+    "unidade": "NP4"
+  },
+  "computador": {
+    "nomePattern": "{UNIDADE}-{SERIAL}",
+    "validarSerial": true,
+    "serialsInvalidos": ["", "DEFAULT STRING", "TO BE FILLED BY O.E.M.", "UNKNOWN", "NONE"],
+    "verificarDuplicidadeNoAd": false
+  },
+  "rede": {
+    "interface": "Ethernet",
+    "usarDhcp": true,
+    "authMode": "machineOrUser",
+    "ssoMode": "preLogon",
+    "perfil8021x": "Network\\LAN.xml",
+    "authenticationSuccessPatterns": [
+      "(?im)^\\s*(Authentication|Autentica.{0,4}o)\\s*:\\s*(succeeded|success|authenticated|êxito)\\s*$"
+    ]
+  },
+  "dominio": {
+    "fqdn": "gruponp.local",
+    "controlador": "AD-MATRIZ-01",
+    "validarDns": true,
+    "validarDc": true,
+    "validarSecureChannel": true,
+    "credenciais": {
+      "modo": "prompt",
+      "usuarioPadrao": "EMPRESA\\deploy.join"
+    }
+  },
+  "aplicativos": [
+    {
+      "arquivo": "Aplicativo01.exe",
+      "argumentos": [],
+      "codigosSaidaEsperados": [0],
+      "validacao": { "tipo": "none" }
+    },
+    {
+      "arquivo": "Aplicativo02.exe",
+      "argumentos": [],
+      "codigosSaidaEsperados": [0],
+      "validacao": { "tipo": "none" }
+    }
+  ],
+  "logging": {
+    "habilitado": true,
+    "arquivo": "C:\\ProgramData\\Deploy\\deploy.log"
+  }
+}
