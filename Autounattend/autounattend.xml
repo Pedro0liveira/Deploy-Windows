@@ -17,8 +17,8 @@
       <!-- Inserir aqui DiskConfiguration e ImageInstall específicos da ISO após teste em VM. -->
       <UserData>
         <AcceptEula>true</AcceptEula>
-        <FullName>__EDITAR_ANTES_DE_USAR_NOME_ORGANIZACAO__ - Paschoalotto</FullName>
-        <Organization>__EDITAR_ANTES_DE_USAR_ORGANIZACAO__ - senha login Paschoalotto</Organization>
+        <FullName>Paschoalotto</FullName>
+        <Organization>Paschoalotto</Organization>
       </UserData>
       <RunSynchronous>
         <!-- O destino C: deve existir após a configuração de disco/imagem acima. -->
