@@ -30,7 +30,7 @@ Detalhes, evidências e os 10 defeitos da varredura: `ANALISE.md`.
 # Download ISO Windows 11
 # Criar USB Ventoy (https://www.ventoy.net/)
 # Copiar Deploy-Windows/ para a raiz do pendrive Ventoy como \Deploy\ (o specialize varre D:..Z: por \Deploy\Deploy.ps1)
-# Copiar autounattend-fixed.xml para entoy\deployutounattend.xml e ventoy.json para entoyentoy.json
+# Copiar autounattend-fixed.xml para \ventoy\deploy\autounattend.xml e ventoy.json para \ventoy\ventoy.json
 ```
 
 ### 2. Ajustar Autounattend.xml
