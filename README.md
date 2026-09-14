@@ -2,8 +2,8 @@
 
 Automação desatendida de instalação, formatação e deployment de Windows 11 via Ventoy + Autounattend.xml + PowerShell.
 
-**Status:** Production-ready (com ressalvas de validação)  
-**Erro corrigido:** 0x8007000D (Autounattend.xml incompleto)
+**Status:** em validação — bloqueios abertos em `ANALISE.md` §4  
+**Erro em investigação:** `0x8007000D - 0x40030` (etapa de disco do setup 24H2)
 
 ---
 
@@ -29,7 +29,8 @@ Detalhes, evidências e os 10 defeitos da varredura: `ANALISE.md`.
 ```bash
 # Download ISO Windows 11
 # Criar USB Ventoy (https://www.ventoy.net/)
-# Extrair Deploy-Windows/ para a raiz do Ventoy como /Deploy/
+# Copiar Deploy-Windows/ para a raiz do pendrive Ventoy como \Deploy\ (o specialize varre D:..Z: por \Deploy\Deploy.ps1)
+# Copiar autounattend-fixed.xml para entoy\deployutounattend.xml e ventoy.json para entoyentoy.json
 ```
 
 ### 2. Ajustar Autounattend.xml
@@ -83,7 +84,7 @@ netsh lan export profile folder=C:\Export
 # 2. Setup executa Autounattend.xml automaticamente
 # 3. Após 2 reboots, Deploy.ps1 dispara automaticamente
 # 4. Revisar logs:
-#    - C:\Deploy_copy_status.txt (windowsPE)
+#    - C:\Deploy_copy_status.txt (specialize — letra do pendrive de onde copiou)
 #    - C:\Deploy_schtasks_status.txt (specialize)
 #    - C:\ProgramData\Deploy\deploy.log (Deploy.ps1)
 ```
@@ -129,8 +130,8 @@ Deploy-Windows/
 ## 🔄 Fluxo de Execução
 
 ### Fase 1: Identificação + Rede
-1. **windowsPE (Autounattend)**: Copia Deploy.ps1 de X:\ (Ventoy) para C:\Deploy
-2. **specialize (Autounattend)**: Cria tarefa agendada "DeployBootstrap"
+1. **windowsPE (Autounattend)**: idioma, disco, imagem, EULA
+2. **specialize (Autounattend)**: copia \Deploy do pendrive Ventoy para C:\Deploy e cria a tarefa agendada "DeployBootstrap"
 3. **Próximo logon admin**: Deploy.ps1 executa
    - Identifica serial BIOS → calcula hostname
    - Valida adaptador Ethernet (link ativo)
@@ -201,14 +202,15 @@ Todas as falhas registram logs em `C:\ProgramData\Deploy\deploy.log`.
 
 ## 🐛 Troubleshooting
 
-### Setup falha com 0x8007000D durante instalação
-- Verificar ISO não corrompida (testar hash MD5/SHA256)
-- Revisar DiskConfiguration em autounattend.xml (layout de disco esperado)
-- Testar em VM com BIOS/UEFI correto
+### Setup falha com 0x8007000D - 0x40030 na etapa de disco
+- Atualizar Ventoy (1.1.17); família 0x400xx no 24H2 é quase sempre Ventoy antigo
+- Validar SHA256 da ISO; trocar pendrive/porta
+- `Shift+F10` → `diskpart` → `list disk`: disco ausente/dinâmico = BIOS em RAID/VMD ou disco a limpar
+- Coletar `X:\Windows\Panther\setuperr.log` antes de mexer no XML (ANALISE.md §3)
 
-### X:\ (Ventoy) não acessível em windowsPE
-- Verificar que Ventoy injetou corretamente Deploy/ no ISO
-- Validar que X:\Deploy\Deploy.ps1 existe (cmd: `dir X:\Deploy`)
+### C:\Deploy_copy_status.txt diz ERRO_DEPLOY_NAO_ENCONTRADO_EM_NENHUMA_UNIDADE
+- A pasta \Deploy precisa estar na raiz da partição de dados do pendrive Ventoy
+- Pendrive foi removido antes do 1º boot do Windows instalado? Precisa ficar até o specialize terminar
 
 ### Deploy.ps1 não dispara após instalação
 - Verificar C:\Deploy_schtasks_status.txt → se houver ERRO_*, revisar condições
