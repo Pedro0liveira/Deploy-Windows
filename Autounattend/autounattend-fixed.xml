@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  AUTOUNATTEND.XML REVISÃO 3
+
+  Corrigido: Adicionadas seções críticas faltantes
+  - DiskConfiguration: particionamento disco 0, layout padrão (EFI/MSR/OS)
+  - ImageInstall: índice Windows 11 Pro (ajuste conforme sua ISO)
+
+  ANTES DE USAR:
+  1. Revisar DiskConfiguration para seu layout esperado
+  2. Validar ImageInstall/InstallFrom/Metadata/@wcm:action conforme sua ISO
+  3. Testar em VM antes de produção
+  4. Manter autounattend.xml original como backup
+-->
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+  <settings pass="windowsPE">
+    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <SetupUILanguage><UILanguage>pt-BR</UILanguage></SetupUILanguage>
+      <InputLocale>pt-BR</InputLocale>
+      <SystemLocale>pt-BR</SystemLocale>
+      <UILanguage>pt-BR</UILanguage>
+      <UserLocale>pt-BR</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <DiskConfiguration>
+        <Disk wcm:action="add">
+          <DiskID>0</DiskID>
+          <WillWipeDisk>true</WillWipeDisk>
+          <CreatePartitions>
+            <!-- EFI System Partition (250 MB) — obrigatório para UEFI -->
+            <CreatePartition wcm:action="add">
+              <Order>1</Order>
+              <Type>EFI</Type>
+              <Size>250</Size>
+            </CreatePartition>
+            <!-- Microsoft System Reserved (16 MB) — obrigatório para muitos setups -->
+            <CreatePartition wcm:action="add">
+              <Order>2</Order>
+              <Type>MSR</Type>
+              <Size>16</Size>
+            </CreatePartition>
+            <!-- Partição principal (resto do disco) — ajuste Type conforme seu BIOS (NTFS/Primary) -->
+            <CreatePartition wcm:action="add">
+              <Order>3</Order>
+              <Type>Primary</Type>
+              <Extend>true</Extend>
+            </CreatePartition>
+          </CreatePartitions>
+          <ModifyPartitions>
+            <!-- EFI → formatação FAT32, mount ponto X: -->
+            <ModifyPartition wcm:action="add">
+              <Order>1</Order>
+              <PartitionID>1</PartitionID>
+              <Format>FAT32</Format>
+              <Label>System</Label>
+            </ModifyPartition>
+            <!-- MSR → nenhuma ação (mantém reserva do sistema) -->
+            <ModifyPartition wcm:action="add">
+              <Order>2</Order>
+              <PartitionID>2</PartitionID>
+            </ModifyPartition>
+            <!-- Partição principal → formatação NTFS, mount C:, ativa -->
+            <ModifyPartition wcm:action="add">
+              <Order>3</Order>
+              <PartitionID>3</PartitionID>
+              <Format>NTFS</Format>
+              <Label>Windows</Label>
+              <Letter>C</Letter>
+              <Active>true</Active>
+            </ModifyPartition>
+          </ModifyPartitions>
+        </Disk>
+      </DiskConfiguration>
+
+      <ImageInstall>
+        <OSImage>
+          <InstallFrom>
+            <MetaData wcm:action="add">
+              <!-- AJUSTE: Índice conforme sua ISO (1=Home, 2=Pro, 3=Enterprise, etc.) -->
+              <!-- Para Windows 11 Pro, use Index="2" ou "Pro" -->
+              <Key>/IMAGE/INDEX</Key>
+              <Value>2</Value>
+            </MetaData>
+          </InstallFrom>
+          <InstallTo>
+            <DiskID>0</DiskID>
+            <PartitionID>3</PartitionID>
+          </InstallTo>
+        </OSImage>
+      </ImageInstall>
+
+      <UserData>
+        <AcceptEula>true</AcceptEula>
+        <FullName>Paschoalotto</FullName>
+        <Organization>Paschoalotto</Organization>
+      </UserData>
+      <RunSynchronous>
+        <!-- Copiar payload injetado pelo Ventoy para disco instalado, com diagnóstico persistente -->
+        <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>90</Order>
+          <Path>cmd /c if exist X:\Deploy\NUL (mkdir C:\Deploy 2&gt;nul &amp; xcopy X:\Deploy C:\Deploy /e /i /h /y &amp; echo OK %date% %time% &gt; C:\Deploy_copy_status.txt) else (echo ERRO_X_DEPLOY_AUSENTE %date% %time% &gt; C:\Deploy_copy_status.txt)</Path>
+          <Description>Copiar payload injetado pelo Ventoy para o disco instalado, com diagnostico persistente</Description>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
+  </settings>
+
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>1</Order>
+          <Path>cmd /c if exist C:\Deploy\Deploy.ps1 (schtasks /create /tn "DeployBootstrap" /tr "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Deploy\Deploy.ps1" /sc onlogon /rl highest /f &gt; C:\Deploy_schtasks_status.txt 2&gt;&amp;1) else (echo ERRO_DEPLOY_PS1_AUSENTE %date% %time% &gt; C:\Deploy_schtasks_status.txt)</Path>
+          <Description>Criar tarefa agendada para disparar o Deploy.ps1 no proximo logon, com privilegios elevados</Description>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
+  </settings>
+
+  <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <OOBE>
+        <HideEULAPage>true</HideEULAPage>
+        <ProtectYourPC>3</ProtectYourPC>
+      </OOBE>
+      <!-- Deploy.ps1 é disparado pela tarefa agendada criada no pass specialize (acima) -->
+    </component>
+  </settings>
+</unattend>
