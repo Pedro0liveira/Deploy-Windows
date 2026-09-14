@@ -9,18 +9,16 @@ Automação desatendida de instalação, formatação e deployment de Windows 11
 
 ## ⚡ Problema Identificado (Error 0x8007000D)
 
-A instalação do Windows 11 falhava com código de erro `0x8007000D - 0x40030` durante o Setup desatendido.
+A instalação do Windows 11 falha com `0x8007000D - 0x40030` na etapa de disco do instalador novo (24H2, `SetupPrep.exe`).
 
-**Raiz:** `Autounattend/autounattend.xml` estava **incompleto**:
-- Faltavam seções críticas: `DiskConfiguration` (particionamento) e `ImageInstall` (índice da imagem)
-- Sem essas seções, Setup não consegue particionar disco nem localizar a imagem Windows
+- `0x8007000D` = `ERROR_INVALID_DATA` (dado inválido/corrompido lido pelo setup).
+- `0x40030` = fase 4, operação `0x30`, não documentada pela Microsoft. Os vizinhos `0x4002C`/`0x4002F` são a etapa "verificando o disco" do 24H2 e quase sempre envolvem **Ventoy desatualizado**.
 
-**Solução:** Arquivo `autounattend-fixed.xml` fornecido com:
-- DiskConfiguration completo (layout EFI/MSR/NTFS padrão)
-- ImageInstall configurado para Windows 11 Pro (Index 2)
-- Instruções de ajuste conforme sua ISO
+**Ordem de ataque:** (1) atualizar Ventoy para 1.1.17 e validar o SHA256 da ISO; (2) se persistir, coletar `X:\Windows\Panther\setuperr.log` via `Shift+F10`; (3) só então trocar o XML.
 
-Veja `ANALISE.md` para detalhes técnicos.
+**Nota:** o `autounattend.xml` original não tem `DiskConfiguration`/`ImageInstall`. Isso **não** gera erro (o setup pergunta na tela). O defeito real do XML é outro: a cópia do payload roda no pass `windowsPE`, antes do particionamento, então `C:\Deploy` nunca chega ao Windows instalado. `autounattend-fixed.xml` move a cópia para o `specialize`.
+
+Detalhes, evidências e os 10 defeitos da varredura: `ANALISE.md`.
 
 ---
 
@@ -111,8 +109,8 @@ Deploy-Windows/
 ├── README.md                        Este arquivo
 ├── ANALISE.md                       Análise técnica do erro
 ├── Autounattend/
-│   ├── autounattend.xml           ⚠️ TEMPLATE (INCOMPLETO — não usar direto)
-│   └── autounattend-fixed.xml     ✅ VERSÃO CORRIGIDA (usar esta)
+│   ├── autounattend.xml           original (cópia do payload no pass errado — ver ANALISE.md §4 #1)
+│   └── autounattend-fixed.xml     revisão 3 (cópia no specialize + DiskConfiguration + ImageInstall)
 ├── Scripts/
 │   ├── Computer.ps1               Identificação + rename de computador
 │   ├── Network.ps1                DHCP, 802.1X, validação de rede/DNS/DC

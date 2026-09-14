@@ -1,18 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  AUTOUNATTEND.XML REVISÃO 3
+  AUTOUNATTEND.XML — Revisão 3 (2026-09-14). Ver ANALISE.md §4.
 
-  Corrigido: Adicionadas seções críticas faltantes
-  - DiskConfiguration: particionamento disco 0, layout padrão (EFI/MSR/OS)
-  - ImageInstall: índice Windows 11 Pro (ajuste conforme sua ISO)
+  Mudanças em relação ao autounattend.xml original:
+  1. Cópia do payload movida do pass windowsPE para o pass specialize.
+     Motivo: RunSynchronous do windowsPE roda ANTES do particionamento e da cópia da
+     imagem (doc MS "How configuration passes work"); C:\ naquele momento é o disco
+     antigo (que será apagado) ou não existe. No specialize, C:\ é o Windows instalado
+     e o pendrive Ventoy (partição exFAT) monta com uma letra qualquer — o comando
+     varre D: a Z: procurando \Deploy\Deploy.ps1.
+     Consequência: basta a pasta Deploy\ na RAIZ do pendrive Ventoy. O plugin
+     "injection" (deploy-payload.7z → X:\) fica opcional.
+  2. DiskConfiguration + ImageInstall adicionados (o original não tinha; sem eles o
+     setup só pergunta na tela, não erra). DiskID usa a variável do Ventoy
+     $$VT_WINDOWS_DISK_1ST_NONVTOY$$ para nunca apontar para o próprio pendrive
+     (auto_install >= 1.0.77). Se NÃO usar Ventoy, troque por 0.
+  3. Layout GPT/UEFI (EFI 300 MB + MSR 16 MB + Windows). Máquina em BIOS legado
+     precisa de layout MBR — não misture.
 
-  ANTES DE USAR:
-  1. Revisar DiskConfiguration para seu layout esperado
-  2. Validar ImageInstall/InstallFrom/Metadata/@wcm:action conforme sua ISO
-  3. Testar em VM antes de produção
-  4. Manter autounattend.xml original como backup
+  ANTES DE USAR: ajustar /IMAGE/INDEX para a edição da SUA ISO
+  (dism /Get-WimInfo /WimFile:D:\sources\install.wim) e testar em VM com o pendrive
+  Ventoy anexado, conferindo C:\Deploy_copy_status.txt e C:\Deploy_schtasks_status.txt.
 -->
-<unattend xmlns="urn:schemas-microsoft-com:unattend">
+<unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
   <settings pass="windowsPE">
     <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <SetupUILanguage><UILanguage>pt-BR</UILanguage></SetupUILanguage>
@@ -24,22 +34,20 @@
     <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <DiskConfiguration>
         <Disk wcm:action="add">
-          <DiskID>0</DiskID>
+          <!-- Ventoy substitui pela 1ª unidade que NÃO é o pendrive. Sem Ventoy: 0 -->
+          <DiskID>$$VT_WINDOWS_DISK_1ST_NONVTOY$$</DiskID>
           <WillWipeDisk>true</WillWipeDisk>
           <CreatePartitions>
-            <!-- EFI System Partition (250 MB) — obrigatório para UEFI -->
             <CreatePartition wcm:action="add">
               <Order>1</Order>
               <Type>EFI</Type>
-              <Size>250</Size>
+              <Size>300</Size>
             </CreatePartition>
-            <!-- Microsoft System Reserved (16 MB) — obrigatório para muitos setups -->
             <CreatePartition wcm:action="add">
               <Order>2</Order>
               <Type>MSR</Type>
               <Size>16</Size>
             </CreatePartition>
-            <!-- Partição principal (resto do disco) — ajuste Type conforme seu BIOS (NTFS/Primary) -->
             <CreatePartition wcm:action="add">
               <Order>3</Order>
               <Type>Primary</Type>
@@ -47,26 +55,18 @@
             </CreatePartition>
           </CreatePartitions>
           <ModifyPartitions>
-            <!-- EFI → formatação FAT32, mount ponto X: -->
             <ModifyPartition wcm:action="add">
               <Order>1</Order>
               <PartitionID>1</PartitionID>
               <Format>FAT32</Format>
               <Label>System</Label>
             </ModifyPartition>
-            <!-- MSR → nenhuma ação (mantém reserva do sistema) -->
             <ModifyPartition wcm:action="add">
               <Order>2</Order>
-              <PartitionID>2</PartitionID>
-            </ModifyPartition>
-            <!-- Partição principal → formatação NTFS, mount C:, ativa -->
-            <ModifyPartition wcm:action="add">
-              <Order>3</Order>
               <PartitionID>3</PartitionID>
               <Format>NTFS</Format>
               <Label>Windows</Label>
               <Letter>C</Letter>
-              <Active>true</Active>
             </ModifyPartition>
           </ModifyPartitions>
         </Disk>
@@ -76,14 +76,13 @@
         <OSImage>
           <InstallFrom>
             <MetaData wcm:action="add">
-              <!-- AJUSTE: Índice conforme sua ISO (1=Home, 2=Pro, 3=Enterprise, etc.) -->
-              <!-- Para Windows 11 Pro, use Index="2" ou "Pro" -->
+              <!-- Conferir com: dism /Get-WimInfo /WimFile:<ISO>\sources\install.wim (ou install.esd) -->
               <Key>/IMAGE/INDEX</Key>
-              <Value>2</Value>
+              <Value>__EDITAR_INDICE_DA_ISO__</Value>
             </MetaData>
           </InstallFrom>
           <InstallTo>
-            <DiskID>0</DiskID>
+            <DiskID>$$VT_WINDOWS_DISK_1ST_NONVTOY$$</DiskID>
             <PartitionID>3</PartitionID>
           </InstallTo>
         </OSImage>
@@ -94,22 +93,21 @@
         <FullName>Paschoalotto</FullName>
         <Organization>Paschoalotto</Organization>
       </UserData>
-      <RunSynchronous>
-        <!-- Copiar payload injetado pelo Ventoy para disco instalado, com diagnóstico persistente -->
-        <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-          <Order>90</Order>
-          <Path>cmd /c if exist X:\Deploy\NUL (mkdir C:\Deploy 2&gt;nul &amp; xcopy X:\Deploy C:\Deploy /e /i /h /y &amp; echo OK %date% %time% &gt; C:\Deploy_copy_status.txt) else (echo ERRO_X_DEPLOY_AUSENTE %date% %time% &gt; C:\Deploy_copy_status.txt)</Path>
-          <Description>Copiar payload injetado pelo Ventoy para o disco instalado, com diagnostico persistente</Description>
-        </RunSynchronousCommand>
-      </RunSynchronous>
     </component>
   </settings>
 
   <settings pass="specialize">
     <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <RunSynchronous>
-        <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+        <RunSynchronousCommand wcm:action="add">
           <Order>1</Order>
+          <!-- Copia \Deploy do pendrive Ventoy (qualquer letra) para C:\Deploy. X:\ não existe mais aqui. -->
+          <Path>cmd /c (for %d in (D E F G H I J K L M N O P Q R S T U V W Y Z) do @if exist %d:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy %d:\Deploy C:\Deploy /e /i /h /y &gt;nul &amp; echo OK %d: %date% %time% &gt; C:\Deploy_copy_status.txt)) &amp; if not exist C:\Deploy_copy_status.txt echo ERRO_DEPLOY_NAO_ENCONTRADO_EM_NENHUMA_UNIDADE %date% %time% &gt; C:\Deploy_copy_status.txt</Path>
+          <Description>Copiar payload do pendrive para o disco instalado, com diagnostico persistente</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <!-- Sem /ru SYSTEM de propósito: Deploy.ps1 usa Read-Host e Get-Credential (interativo). A conta que loga precisa ser admin local. Ver ANALISE.md §4 #3/#4. -->
           <Path>cmd /c if exist C:\Deploy\Deploy.ps1 (schtasks /create /tn "DeployBootstrap" /tr "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Deploy\Deploy.ps1" /sc onlogon /rl highest /f &gt; C:\Deploy_schtasks_status.txt 2&gt;&amp;1) else (echo ERRO_DEPLOY_PS1_AUSENTE %date% %time% &gt; C:\Deploy_schtasks_status.txt)</Path>
           <Description>Criar tarefa agendada para disparar o Deploy.ps1 no proximo logon, com privilegios elevados</Description>
         </RunSynchronousCommand>
@@ -123,7 +121,6 @@
         <HideEULAPage>true</HideEULAPage>
         <ProtectYourPC>3</ProtectYourPC>
       </OOBE>
-      <!-- Deploy.ps1 é disparado pela tarefa agendada criada no pass specialize (acima) -->
     </component>
   </settings>
 </unattend>
