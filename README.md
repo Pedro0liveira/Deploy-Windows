@@ -85,7 +85,7 @@ netsh lan export profile folder=C:\Export
 # 3. Após 2 reboots, Deploy.ps1 dispara automaticamente
 # 4. Revisar logs:
 #    - C:\Deploy_copy_status.txt (specialize — letra do pendrive de onde copiou)
-#    - C:\Deploy_schtasks_status.txt (specialize)
+#    - C:\Deploy_bootstrap_status.txt (specialize)
 #    - C:\ProgramData\Deploy\deploy.log (Deploy.ps1)
 ```
 
@@ -111,7 +111,7 @@ Deploy-Windows/
 ├── ANALISE.md                       Análise técnica do erro
 ├── Autounattend/
 │   ├── autounattend.xml           original (cópia do payload no pass errado — ver ANALISE.md §4 #1)
-│   └── autounattend-fixed.xml     revisão 3 (cópia no specialize + DiskConfiguration + ImageInstall)
+│   └── autounattend-fixed.xml     revisão 5 (cópia no specialize + RunOnce + DiskConfiguration/ImageInstall)
 ├── Scripts/
 │   ├── Computer.ps1               Identificação + rename de computador
 │   ├── Network.ps1                DHCP, 802.1X, validação de rede/DNS/DC
@@ -131,7 +131,7 @@ Deploy-Windows/
 
 ### Fase 1: Identificação + Rede
 1. **windowsPE (Autounattend)**: idioma, disco, imagem, EULA
-2. **specialize (Autounattend)**: copia \Deploy do pendrive Ventoy para C:\Deploy e cria a tarefa agendada "DeployBootstrap"
+2. **specialize (Autounattend)**: copia \Deploy do pendrive Ventoy para C:\Deploy e registra o RunOnce "DeployBootstrap" em HKLM
 3. **Próximo logon admin**: Deploy.ps1 executa
    - Identifica serial BIOS → calcula hostname
    - Valida adaptador Ethernet (link ativo)
@@ -213,7 +213,7 @@ Todas as falhas registram logs em `C:\ProgramData\Deploy\deploy.log`.
 - Pendrive foi removido antes do 1º boot do Windows instalado? Precisa ficar até o specialize terminar
 
 ### Deploy.ps1 não dispara após instalação
-- Verificar C:\Deploy_schtasks_status.txt → se houver ERRO_*, revisar condições
+- Verificar C:\Deploy_bootstrap_status.txt → se houver ERRO_*, revisar condições
 - Testar logon com conta administradora local
 - Revisar que C:\Deploy\Deploy.ps1 foi copiado corretamente
 
