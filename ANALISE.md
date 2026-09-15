@@ -1,6 +1,34 @@
 # Análise — erro `0x8007000D - 0x40030` no Windows 11 Setup
 
-Data: 2026-09-14. Base: código do repo (commit `7b78f73`), foto da tela, documentação Microsoft/Ventoy e issues públicas (fontes no fim).
+Data: 2026-09-14 (atualizado 2026-09-15 com incidente real, ver §0). Base: código do repo (commit `7b78f73`), foto da tela, documentação Microsoft/Ventoy e issues públicas (fontes no fim).
+
+## 0. Atualização 2026-09-15 — causa real encontrada em campo, corrigida na revisão 4
+
+A revisão 3 do `autounattend-fixed.xml` (proposta em §4/§5 abaixo) foi testada na máquina real e **quebrou de outro jeito**: tela genérica "computador foi reiniciado de forma inesperada", sem código hex. Log coletado via `Shift+F10` → `type X:\Windows\Panther\setuperr.log`:
+
+```
+[setup.exe] SMI data results dump: Source = Name: Microsoft-Windows-Deployment, ...
+  Settings/RunSynchronousCommand/[Order="1"]/Path
+[setup.exe] SMI data results dump: Description = O valor é inválido.
+  Settings/RunSynchronousCommand/[Order="2"]/Path
+[setup.exe] SMI data results dump: Description = O valor é inválido.
+[0x060565] IBS Callback_Unattend_InitEngine: The provided unattend file
+  [C:\WINDOWS\Panther\unattend.xml] is not a valid unattended Setup answer file;
+  hr = 0x1, hrResult = 0x80220005
+```
+
+**Causa:** o campo `Path` de `RunSynchronousCommand` (componente `Microsoft-Windows-Deployment`) tem **limite de 259 caracteres**. Os dois comandos da revisão 3 estouravam isso:
+
+| Comando (rev. 3) | Tamanho | Limite |
+|---|---|---|
+| Order 1 — cópia com loop `for %d in (D E F ... Z) do ...` | 359 chars | 259 |
+| Order 2 — `schtasks /create ...` com redirecionamentos embutidos | 306 chars | 259 |
+
+Com qualquer `Path` acima do limite, o Setup rejeita o `unattend.xml` **inteiro** (`hr = 0x80220005`, WMIConfig "the value is invalid") já dentro do pass `specialize` — ou seja, depois de particionar e aplicar a imagem, o que produz a tela genérica de erro fatal em vez de um erro específico do comando.
+
+**Correção (revisão 4, arquivo já atualizado):** o loop `for` foi desmembrado em **22 `RunSynchronousCommand` curtos**, um por letra de unidade candidata (`D:` a `Z:`, pulando `C:` que é sempre o destino), cada um guardado por `if not exist C:\Deploy_copy_status.txt` para não repetir trabalho após achar a certa. O comando de `schtasks` foi encurtado e separado do registro de status. Todos os 26 comandos resultantes foram validados programaticamente — o maior tem 180 caracteres, folga de ~80 contra o limite.
+
+Isso **não estava nos 10 defeitos originais listados em §4** porque a revisão 3 nunca tinha sido testada contra o limite de tamanho do schema — só contra a lógica (qual pass roda quando). Fica registrado aqui como aprendizado: **todo `Path`/`CommandLine` de unattend precisa ser medido, não só revisado visualmente.**
 
 ## 1. O que o código diz
 
