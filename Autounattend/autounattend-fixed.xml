@@ -1,26 +1,62 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  AUTOUNATTEND.XML — Revisão 3 (2026-09-14). Ver ANALISE.md §4.
+  AUTOUNATTEND.XML — Revisão 5 (2026-09-15). Ver ANALISE.md §0 (incidente real) e §4.
 
-  Mudanças em relação ao autounattend.xml original:
-  1. Cópia do payload movida do pass windowsPE para o pass specialize.
-     Motivo: RunSynchronous do windowsPE roda ANTES do particionamento e da cópia da
-     imagem (doc MS "How configuration passes work"); C:\ naquele momento é o disco
-     antigo (que será apagado) ou não existe. No specialize, C:\ é o Windows instalado
-     e o pendrive Ventoy (partição exFAT) monta com uma letra qualquer — o comando
-     varre D: a Z: procurando \Deploy\Deploy.ps1.
-     Consequência: basta a pasta Deploy\ na RAIZ do pendrive Ventoy. O plugin
-     "injection" (deploy-payload.7z → X:\) fica opcional.
-  2. DiskConfiguration + ImageInstall adicionados (o original não tinha; sem eles o
-     setup só pergunta na tela, não erra). DiskID usa a variável do Ventoy
-     $$VT_WINDOWS_DISK_1ST_NONVTOY$$ para nunca apontar para o próprio pendrive
-     (auto_install >= 1.0.77). Se NÃO usar Ventoy, troque por 0.
-  3. Layout GPT/UEFI (EFI 300 MB + MSR 16 MB + Windows). Máquina em BIOS legado
-     precisa de layout MBR — não misture.
+  Mudanças em relação à revisão 4 (achados da revisão adversarial do Codex):
+  5. schtasks TROCADO por RunOnce em HKLM. Motivo: RunSynchronous do specialize roda
+     como SYSTEM, e "schtasks /create" sem /ru registra a tarefa com o principal de
+     quem a criou — ou seja, SYSTEM. O Deploy.ps1 usa Read-Host e Get-Credential, que
+     não têm UI em sessão SYSTEM: travaria para sempre. RunOnce em HKLM dispara na
+     sessão interativa do primeiro usuário que logar, com o token dele (elevado, se
+     for admin local). Bônus: elimina a corrida entre a tarefa agendada e o RunOnce
+     que o próprio Deploy.ps1 registra (defeito #5 do ANALISE.md).
+  6. xcopy agora usa "&&" antes do echo OK (era "&"). Com "&" o marcador de sucesso
+     era gravado mesmo se o xcopy falhasse por erro de leitura ou disco cheio, e as
+     letras seguintes eram puladas com o payload pela metade.
+  7. Letra X: incluída na varredura. Estava de fora por ser o RAM disk do WinPE, mas
+     no pass specialize o WinPE já não existe e o volume do Ventoy pode receber X:.
 
-  ANTES DE USAR: ajustar /IMAGE/INDEX para a edição da SUA ISO
-  (dism /Get-WimInfo /WimFile:D:\sources\install.wim) e testar em VM com o pendrive
-  Ventoy anexado, conferindo C:\Deploy_copy_status.txt e C:\Deploy_schtasks_status.txt.
+  ATENÇÃO — RISCO NÃO RESOLVIDO NO ARQUIVO (decisão de operação):
+  $$VT_WINDOWS_DISK_1ST_NONVTOY$$ resolve para o PRIMEIRO disco que não é o pendrive,
+  não para "o disco certo". Numa máquina com um HD de dados além do disco de sistema,
+  a variável pode apontar para o HD de dados e WillWipeDisk=true o apagaria. Antes de
+  rodar em máquina com mais de um disco interno, confirmar a ordem dos discos
+  (Shift+F10 -> diskpart -> list disk) ou desconectar fisicamente os demais.
+
+  Mudanças em relação à revisão 3:
+  4. CAUSA RAIZ do erro "computador reiniciado de forma inesperada" com log
+     hrResult=0x80220005 em C:\Windows\Panther\setuperr.log: o campo Path de
+     RunSynchronousCommand tem limite de 259 caracteres (schema
+     Microsoft-Windows-Deployment). Os dois comandos da rev. 3 (cópia com loop
+     FOR e criação da tarefa agendada) tinham 359 e 306 caracteres — acima do
+     limite. Setup rejeitou o unattend.xml inteiro (Order 1 E 2 marcados como
+     "valor inválido"), sem tocar o disco ainda.
+     Correção: loop FOR substituído por 22 RunSynchronousCommand curtos, um por
+     letra de unidade candidata (D:..Z:, pulando C: que é sempre o Windows
+     instalado), cada um guardado por "if not exist C:\Deploy_copy_status.txt"
+     para não repetir trabalho depois de achar. Comando de schtasks também
+     encurtado (removidos redirecionamentos/echo embutidos, virou comando
+     separado). Todos os 26 comandos abaixo do limite (checados
+     programaticamente, o mais longo tem 180 caracteres).
+
+  Mudanças da revisão 3 (mantidas):
+  1. Cópia do payload roda no pass specialize (não no windowsPE — RunSynchronous
+     do windowsPE roda ANTES do particionamento e da cópia da imagem, doc MS
+     "How configuration passes work"; C:\ naquele momento não é o destino).
+  2. DiskConfiguration + ImageInstall adicionados. DiskID usa a variável do
+     Ventoy $$VT_WINDOWS_DISK_1ST_NONVTOY$$ para nunca apontar para o próprio
+     pendrive (auto_install >= 1.0.77). Sem Ventoy, trocar por 0.
+  3. Layout GPT/UEFI (EFI 300 MB + MSR 16 MB + Windows). BIOS legado exige MBR.
+
+  ANTES DE USAR:
+  - Ajustar /IMAGE/INDEX para a edição da SUA ISO
+    (dism /Get-WimInfo /WimFile:D:\sources\install.wim).
+  - Testar em VM com o pendrive Ventoy anexado, conferindo
+    C:\Deploy_copy_status.txt (deve conter "OK <letra>") e
+    C:\Deploy_bootstrap_status.txt.
+  - A varredura cobre D: a Z:. Se o volume montar fora disso (incomum), adicionar mais
+    um bloco RunSynchronousCommand seguindo o mesmo padrão, SEMPRE checando o
+    comprimento do Path (< 259 chars) antes de adicionar.
 -->
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
   <settings pass="windowsPE">
@@ -101,15 +137,138 @@
       <RunSynchronous>
         <RunSynchronousCommand wcm:action="add">
           <Order>1</Order>
-          <!-- Copia \Deploy do pendrive Ventoy (qualquer letra) para C:\Deploy. X:\ não existe mais aqui. -->
-          <Path>cmd /c (for %d in (D E F G H I J K L M N O P Q R S T U V W Y Z) do @if exist %d:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy %d:\Deploy C:\Deploy /e /i /h /y &gt;nul &amp; echo OK %d: %date% %time% &gt; C:\Deploy_copy_status.txt)) &amp; if not exist C:\Deploy_copy_status.txt echo ERRO_DEPLOY_NAO_ENCONTRADO_EM_NENHUMA_UNIDADE %date% %time% &gt; C:\Deploy_copy_status.txt</Path>
-          <Description>Copiar payload do pendrive para o disco instalado, com diagnostico persistente</Description>
+          <Path>cmd /c if not exist C:\Deploy_copy_status.txt if exist D:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy D:\Deploy C:\Deploy /e/i/h/y&gt;nul &amp;&amp; echo OK D &gt; C:\Deploy_copy_status.txt)</Path>
+          <Description>Copiar payload se estiver em D:\Deploy (marca OK so se xcopy teve exito)</Description>
         </RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add">
           <Order>2</Order>
-          <!-- Sem /ru SYSTEM de propósito: Deploy.ps1 usa Read-Host e Get-Credential (interativo). A conta que loga precisa ser admin local. Ver ANALISE.md §4 #3/#4. -->
-          <Path>cmd /c if exist C:\Deploy\Deploy.ps1 (schtasks /create /tn "DeployBootstrap" /tr "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Deploy\Deploy.ps1" /sc onlogon /rl highest /f &gt; C:\Deploy_schtasks_status.txt 2&gt;&amp;1) else (echo ERRO_DEPLOY_PS1_AUSENTE %date% %time% &gt; C:\Deploy_schtasks_status.txt)</Path>
-          <Description>Criar tarefa agendada para disparar o Deploy.ps1 no proximo logon, com privilegios elevados</Description>
+          <Path>cmd /c if not exist C:\Deploy_copy_status.txt if exist E:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy E:\Deploy C:\Deploy /e/i/h/y&gt;nul &amp;&amp; echo OK E &gt; C:\Deploy_copy_status.txt)</Path>
+          <Description>Copiar payload se estiver em E:\Deploy (marca OK so se xcopy teve exito)</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>3</Order>
+          <Path>cmd /c if not exist C:\Deploy_copy_status.txt if exist F:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy F:\Deploy C:\Deploy /e/i/h/y&gt;nul &amp;&amp; echo OK F &gt; C:\Deploy_copy_status.txt)</Path>
+          <Description>Copiar payload se estiver em F:\Deploy (marca OK so se xcopy teve exito)</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>4</Order>
+          <Path>cmd /c if not exist C:\Deploy_copy_status.txt if exist G:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy G:\Deploy C:\Deploy /e/i/h/y&gt;nul &amp;&amp; echo OK G &gt; C:\Deploy_copy_status.txt)</Path>
+          <Description>Copiar payload se estiver em G:\Deploy (marca OK so se xcopy teve exito)</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>5</Order>
+          <Path>cmd /c if not exist C:\Deploy_copy_status.txt if exist H:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy H:\Deploy C:\Deploy /e/i/h/y&gt;nul &amp;&amp; echo OK H &gt; C:\Deploy_copy_status.txt)</Path>
+          <Description>Copiar payload se estiver em H:\Deploy (marca OK so se xcopy teve exito)</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>6</Order>
+          <Path>cmd /c if not exist C:\Deploy_copy_status.txt if exist I:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy I:\Deploy C:\Deploy /e/i/h/y&gt;nul &amp;&amp; echo OK I &gt; C:\Deploy_copy_status.txt)</Path>
+          <Description>Copiar payload se estiver em I:\Deploy (marca OK so se xcopy teve exito)</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>7</Order>
+          <Path>cmd /c if not exist C:\Deploy_copy_status.txt if exist J:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy J:\Deploy C:\Deploy /e/i/h/y&gt;nul &amp;&amp; echo OK J &gt; C:\Deploy_copy_status.txt)</Path>
+          <Description>Copiar payload se estiver em J:\Deploy (marca OK so se xcopy teve exito)</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>8</Order>
+          <Path>cmd /c if not exist C:\Deploy_copy_status.txt if exist K:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy K:\Deploy C:\Deploy /e/i/h/y&gt;nul &amp;&amp; echo OK K &gt; C:\Deploy_copy_status.txt)</Path>
+          <Description>Copiar payload se estiver em K:\Deploy (marca OK so se xcopy teve exito)</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>9</Order>
+          <Path>cmd /c if not exist C:\Deploy_copy_status.txt if exist L:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy L:\Deploy C:\Deploy /e/i/h/y&gt;nul &amp;&amp; echo OK L &gt; C:\Deploy_copy_status.txt)</Path>
+          <Description>Copiar payload se estiver em L:\Deploy (marca OK so se xcopy teve exito)</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>10</Order>
+          <Path>cmd /c if not exist C:\Deploy_copy_status.txt if exist M:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy M:\Deploy C:\Deploy /e/i/h/y&gt;nul &amp;&amp; echo OK M &gt; C:\Deploy_copy_status.txt)</Path>
+          <Description>Copiar payload se estiver em M:\Deploy (marca OK so se xcopy teve exito)</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>11</Order>
+          <Path>cmd /c if not exist C:\Deploy_copy_status.txt if exist N:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy N:\Deploy C:\Deploy /e/i/h/y&gt;nul &amp;&amp; echo OK N &gt; C:\Deploy_copy_status.txt)</Path>
+          <Description>Copiar payload se estiver em N:\Deploy (marca OK so se xcopy teve exito)</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>12</Order>
+          <Path>cmd /c if not exist C:\Deploy_copy_status.txt if exist O:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy O:\Deploy C:\Deploy /e/i/h/y&gt;nul &amp;&amp; echo OK O &gt; C:\Deploy_copy_status.txt)</Path>
+          <Description>Copiar payload se estiver em O:\Deploy (marca OK so se xcopy teve exito)</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>13</Order>
+          <Path>cmd /c if not exist C:\Deploy_copy_status.txt if exist P:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy P:\Deploy C:\Deploy /e/i/h/y&gt;nul &amp;&amp; echo OK P &gt; C:\Deploy_copy_status.txt)</Path>
+          <Description>Copiar payload se estiver em P:\Deploy (marca OK so se xcopy teve exito)</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>14</Order>
+          <Path>cmd /c if not exist C:\Deploy_copy_status.txt if exist Q:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy Q:\Deploy C:\Deploy /e/i/h/y&gt;nul &amp;&amp; echo OK Q &gt; C:\Deploy_copy_status.txt)</Path>
+          <Description>Copiar payload se estiver em Q:\Deploy (marca OK so se xcopy teve exito)</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>15</Order>
+          <Path>cmd /c if not exist C:\Deploy_copy_status.txt if exist R:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy R:\Deploy C:\Deploy /e/i/h/y&gt;nul &amp;&amp; echo OK R &gt; C:\Deploy_copy_status.txt)</Path>
+          <Description>Copiar payload se estiver em R:\Deploy (marca OK so se xcopy teve exito)</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>16</Order>
+          <Path>cmd /c if not exist C:\Deploy_copy_status.txt if exist S:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy S:\Deploy C:\Deploy /e/i/h/y&gt;nul &amp;&amp; echo OK S &gt; C:\Deploy_copy_status.txt)</Path>
+          <Description>Copiar payload se estiver em S:\Deploy (marca OK so se xcopy teve exito)</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>17</Order>
+          <Path>cmd /c if not exist C:\Deploy_copy_status.txt if exist T:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy T:\Deploy C:\Deploy /e/i/h/y&gt;nul &amp;&amp; echo OK T &gt; C:\Deploy_copy_status.txt)</Path>
+          <Description>Copiar payload se estiver em T:\Deploy (marca OK so se xcopy teve exito)</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>18</Order>
+          <Path>cmd /c if not exist C:\Deploy_copy_status.txt if exist U:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy U:\Deploy C:\Deploy /e/i/h/y&gt;nul &amp;&amp; echo OK U &gt; C:\Deploy_copy_status.txt)</Path>
+          <Description>Copiar payload se estiver em U:\Deploy (marca OK so se xcopy teve exito)</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>19</Order>
+          <Path>cmd /c if not exist C:\Deploy_copy_status.txt if exist V:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy V:\Deploy C:\Deploy /e/i/h/y&gt;nul &amp;&amp; echo OK V &gt; C:\Deploy_copy_status.txt)</Path>
+          <Description>Copiar payload se estiver em V:\Deploy (marca OK so se xcopy teve exito)</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>20</Order>
+          <Path>cmd /c if not exist C:\Deploy_copy_status.txt if exist W:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy W:\Deploy C:\Deploy /e/i/h/y&gt;nul &amp;&amp; echo OK W &gt; C:\Deploy_copy_status.txt)</Path>
+          <Description>Copiar payload se estiver em W:\Deploy (marca OK so se xcopy teve exito)</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>21</Order>
+          <Path>cmd /c if not exist C:\Deploy_copy_status.txt if exist X:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy X:\Deploy C:\Deploy /e/i/h/y&gt;nul &amp;&amp; echo OK X &gt; C:\Deploy_copy_status.txt)</Path>
+          <Description>Copiar payload se estiver em X:\Deploy (marca OK so se xcopy teve exito)</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>22</Order>
+          <Path>cmd /c if not exist C:\Deploy_copy_status.txt if exist Y:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy Y:\Deploy C:\Deploy /e/i/h/y&gt;nul &amp;&amp; echo OK Y &gt; C:\Deploy_copy_status.txt)</Path>
+          <Description>Copiar payload se estiver em Y:\Deploy (marca OK so se xcopy teve exito)</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>23</Order>
+          <Path>cmd /c if not exist C:\Deploy_copy_status.txt if exist Z:\Deploy\Deploy.ps1 (mkdir C:\Deploy 2&gt;nul &amp; xcopy Z:\Deploy C:\Deploy /e/i/h/y&gt;nul &amp;&amp; echo OK Z &gt; C:\Deploy_copy_status.txt)</Path>
+          <Description>Copiar payload se estiver em Z:\Deploy (marca OK so se xcopy teve exito)</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>24</Order>
+          <Path>cmd /c if not exist C:\Deploy_copy_status.txt echo ERRO_NAO_ENCONTRADO &gt; C:\Deploy_copy_status.txt</Path>
+          <Description>Diagnostico: nenhuma unidade tinha o payload</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>25</Order>
+          <Path>reg add HKLM\Software\Microsoft\Windows\CurrentVersion\RunOnce /v DeployBootstrap /t REG_SZ /d "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Deploy\Deploy.ps1" /f</Path>
+          <Description>Disparar Deploy.ps1 no primeiro logon interativo (contexto do usuario, nao SYSTEM)</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>26</Order>
+          <Path>cmd /c reg query HKLM\Software\Microsoft\Windows\CurrentVersion\RunOnce /v DeployBootstrap &gt;C:\Deploy_bootstrap_status.txt 2&gt;&amp;1</Path>
+          <Description>Registrar status do gatilho de bootstrap</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>27</Order>
+          <Path>cmd /c if not exist C:\Deploy\Deploy.ps1 echo ERRO_DEPLOY_PS1_AUSENTE &gt; C:\Deploy_bootstrap_status.txt</Path>
+          <Description>Diagnostico: Deploy.ps1 nao chegou em C:\Deploy</Description>
         </RunSynchronousCommand>
       </RunSynchronous>
     </component>
