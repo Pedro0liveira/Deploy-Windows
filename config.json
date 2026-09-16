@@ -10,25 +10,23 @@
   "computador": {
     "nomePattern": "{UNIDADE}-{SERIAL}",
     "validarSerial": true,
-    "serialsInvalidos": ["", "DEFAULT STRING", "TO BE FILLED BY O.E.M.", "UNKNOWN", "NONE"],
-    "verificarDuplicidadeNoAd": false
+    "serialsInvalidos": ["", "DEFAULT STRING", "TO BE FILLED BY O.E.M.", "UNKNOWN", "NONE"]
   },
   "rede": {
+    "mode": "__DEFINIR_8021x_OU_preparation__",
+    "timeoutSeconds": 120,
     "interface": "Ethernet",
     "usarDhcp": true,
     "authMode": "machineOrUser",
     "ssoMode": "preLogon",
     "perfil8021x": "Network\\LAN.xml",
     "authenticationSuccessPatterns": [
-      "(?im)^\\s*(Authentication|Autentica.{0,4}o)\\s*:\\s*(succeeded|success|authenticated|êxito)\\s*$"
+      "(?im)^\\s*(Authentication(?: state)?|Autentica.{0,4}o|Estado d[ae] autentica.{0,4}o)\\s*:\\s*(succeeded|success|authenticated|êxito|autenticado|bem-sucedida)\\s*$"
     ]
   },
   "dominio": {
     "fqdn": "gruponp.local",
     "controlador": "AD-MATRIZ-01",
-    "validarDns": true,
-    "validarDc": true,
-    "validarSecureChannel": true,
     "credenciais": {
       "modo": "prompt",
       "usuarioPadrao": "EMPRESA\\deploy.join"
@@ -37,15 +35,17 @@
   "aplicativos": [
     {
       "arquivo": "Aplicativo01.exe",
+      "timeoutSeconds": 1800,
       "argumentos": [],
       "codigosSaidaEsperados": [0],
-      "validacao": { "tipo": "none" }
+      "validacao": { "tipo": "file", "caminho": "__DEFINIR_ARQUIVO_INSTALADO__" }
     },
     {
       "arquivo": "Aplicativo02.exe",
+      "timeoutSeconds": 1800,
       "argumentos": [],
       "codigosSaidaEsperados": [0],
-      "validacao": { "tipo": "none" }
+      "validacao": { "tipo": "file", "caminho": "__DEFINIR_ARQUIVO_INSTALADO__" }
     }
   ],
   "logging": {

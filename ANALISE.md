@@ -1,5 +1,24 @@
 # Análise — erro `0x8007000D - 0x40030` no Windows 11 Setup
 
+> **Atualização rev. 6 (15/09/2026):** as seções abaixo preservam o histórico das revisões anteriores. Para preparar mídia e executar, siga exclusivamente o [README](README.md) e o [guia de empacotamento](VentoyPackaging/LEIA-ME.md). O XML antigo foi retirado do pacote; permanece no histórico Git.
+
+## Revisão completa e correções da rev. 6
+
+- Confirmado erro de parser no PowerShell 5.1/ANSI 1252 em `Deploy.ps1` UTF-8 sem BOM; scripts agora usam BOM e testes executam no 5.1.
+- Configuração/perfil/instaladores são validados antes de montar a mídia. Rede indefinida permanece um bloqueio explícito: escolher `8021x` ou rede de preparação autorizada.
+- `dot3svc` é preparado antes de autenticar; DHCP vem depois. Consulta `netsh lan show interfaces` sem parâmetro inválido, com seleção por nome/GUID e padrões pt/en.
+- Rename/join usam estados pendentes. Falhas não avançam para validação pós-reboot. Estado é gravado atomicamente, vinculado à identidade/configuração; reboot pendente é reconciliado.
+- O primeiro logon usa RunOnce para `Bootstrap.ps1`. As retomadas usam tarefa persistente criada **na sessão do administrador**, com SID desse usuário, `Interactive` e `Highest`; não SYSTEM. Removida ao concluir. `ConfigPath` é preservado.
+- Bootstrap captura falhas iniciais e mantém erro visível. Um lock impede execução concorrente do orquestrador.
+- Aplicativos sem argumentos são aceitos; detecção obrigatória, progresso persistido, timeout sem matar instalador e reboot 3010 coordenado. EXEs que iniciam filhos e saem antes deles exigem wrapper síncrono homologado.
+- Build único gera pasta `Deploy`, manifesto SHA256, identificador de pacote e configuração por ISO exata. Não usa mais injeção 7z. Maior `Path` gerado: 239 caracteres.
+- Seleção manual do disco é o padrão. Apagamento automático exige ID explícito e `-ConfirmDiskErase`; não se presume que o primeiro disco não-Ventoy seja o correto.
+- Opções sem implementação foram removidas; validações AD são obrigatórias e o DC configurado é usado no ingresso.
+
+Validação: suíte local em Windows PowerShell 5.1 com operações destrutivas simuladas, parser/BOM, geração dos modos manual/automático e manifesto. Testes de Dell/ISO, Windows SIM, logon/reboots, EAP/RADIUS e instaladores reais continuam pendentes. O incidente original `0x8007000D-0x40030` continua sem causa isolada.
+
+---
+
 Data: 2026-09-14 (atualizado 2026-09-15 com incidente real, ver §0). Base: código do repo (commit `7b78f73`), foto da tela, documentação Microsoft/Ventoy e issues públicas (fontes no fim).
 
 ## 0. Atualização 2026-09-15 — causa real encontrada em campo (rev. 4) + revisão adversarial (rev. 5)

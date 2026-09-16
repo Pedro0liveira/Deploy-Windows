@@ -1,279 +1,145 @@
 # Deploy-Windows
 
-Automação desatendida de instalação, formatação e deployment de Windows 11 via Ventoy + Autounattend.xml + PowerShell.
+Instalação de Windows 11 via Ventoy, seguida de configuração interativa de rede, nome, aplicativos e ingresso no Active Directory.
 
-**Status:** em validação — bloqueios abertos em `ANALISE.md` §4  
-**Erro em investigação:** `0x8007000D - 0x40030` (etapa de disco do setup 24H2)
+**Revisão 6 — em validação.** Scripts e empacotamento têm testes no Windows PowerShell 5.1. A Dell, a ISO, os logons/reboots, o RADIUS e os instaladores reais ainda precisam de homologação. O erro original `0x8007000D-0x40030` não tem causa isolada; não está declarado resolvido.
 
----
+## Antes de preparar a mídia
 
-## ⚡ Problema Identificado (Error 0x8007000D)
+O repositório é um modelo e recusa a configuração incompleta entregue. Defina:
 
-A instalação do Windows 11 falha com `0x8007000D - 0x40030` na etapa de disco do instalador novo (24H2, `SetupPrep.exe`).
+1. **Rede inicial:** `rede.mode` deve ser `8021x` ou `preparation`. Esta última significa porta/VLAN de preparação previamente autorizada; não desativa autenticação configurada na máquina/switch. Ainda não foi confirmado qual cenário estará disponível na Dell.
+2. **802.1X, quando exigido:** perfil LAN autorizado, certificados/credenciais necessários no computador novo e método que funcione antes do ingresso no AD. Importar o perfil sozinho não instala certificados nem cria identidade de máquina no domínio.
+3. **Identidade:** unidade, padrão de hostname, conta real de ingresso e **FQDN real do DC** em `dominio.controlador`. O nome curto `AD-MATRIZ-01` do modelo precisa ser completado com o domínio DNS confirmado. Versões atuais do Windows exigem FQDN ao especificar o servidor de ingresso ([Microsoft](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.management/add-computer?view=powershell-5.1#-server)). O nome final do computador deve caber em 15 caracteres; seriais não são truncados silenciosamente.
+4. **Aplicativos:** EXEs reais em `Temp`, argumentos oficiais de instalação sem reboot, timeout, códigos de saída e arquivo de detecção confiável. Para um piloto explicitamente sem aplicativos, use `"aplicativos": []`.
+5. **ISO/equipamento:** hash/origem da ISO, índice real da edição compatível com AD, idioma pt-BR do template, UEFI e drivers de SSD/rede. O pacote espera Windows em `C:`. Não selecione Home.
+6. **Operador:** conta administrativa local disponível após cada reboot, inclusive depois do ingresso no AD. Use a mesma conta em todas as retomadas; a tarefa é vinculada ao SID dela.
 
-- `0x8007000D` = `ERROR_INVALID_DATA` (dado inválido/corrompido lido pelo setup).
-- `0x40030` = fase 4, operação `0x30`, não documentada pela Microsoft. Os vizinhos `0x4002C`/`0x4002F` são a etapa "verificando o disco" do 24H2 e quase sempre envolvem **Ventoy desatualizado**.
+Mantenha configurações reais em `config.local.json` e perfis em `Network/*.local.xml` (ignorados pelo Git). Não publique credenciais, certificados privados ou instaladores no repositório. O perfil marcador `Network/LAN.xml` permanece apenas como instrução.
 
-**Ordem de ataque:** (1) atualizar Ventoy para 1.1.17 e validar o SHA256 da ISO; (2) se persistir, coletar `X:\Windows\Panther\setuperr.log` via `Shift+F10`; (3) só então trocar o XML.
+## Preparar um pacote
 
-**Nota:** o `autounattend.xml` original não tem `DiskConfiguration`/`ImageInstall`. Isso **não** gera erro (o setup pergunta na tela). O defeito real do XML é outro: a cópia do payload roda no pass `windowsPE`, antes do particionamento, então `C:\Deploy` nunca chega ao Windows instalado. `autounattend-fixed.xml` move a cópia para o `specialize`.
+Use **Windows PowerShell 5.1 (`powershell.exe`)**, sem necessidade de privilégios administrativos para o build. Não copie o template XML diretamente para o USB. Não use o procedimento antigo com injeção 7z.
 
-Detalhes, evidências e os 10 defeitos da varredura: `ANALISE.md`.
+```powershell
+# Examine a imagem da ISO montada; pode ser install.esd em vez de install.wim.
+dism /Get-WimInfo /WimFile:D:\sources\install.wim
 
----
-
-## 🚀 Quick Start
-
-### 1. Preparar ISO e Ventoy
-
-```bash
-# Download ISO Windows 11
-# Criar USB Ventoy (https://www.ventoy.net/)
-# Copiar Deploy-Windows/ para a raiz do pendrive Ventoy como \Deploy\ (o specialize varre D:..Z: por \Deploy\Deploy.ps1)
-# Copiar autounattend-fixed.xml para \ventoy\deploy\autounattend.xml e ventoy.json para \ventoy\ventoy.json
+# Informe o índice observado na SUA imagem, sem presumir numeração de edições.
+$indiceConfirmado = [int](Read-Host 'Índice da edição compatível com AD')
+.\VentoyPackaging\Build-VentoyPayload.ps1 `
+    -ConfigPath .\config.local.json `
+    -OutputDirectory C:\Pacotes\Deploy-Dell-01 `
+    -ImageIndex $indiceConfirmado `
+    -IsoPath '/ISO/Windows11.iso'
 ```
 
-### 2. Ajustar Autounattend.xml
+Use uma saída nova, fora do repositório. O build valida configuração, perfil, arquivos, BOM/parser, manifesto e comprimento dos comandos. Ele **não abre a ISO nem valida o índice contra seu WIM/ESD**: essa conferência é a etapa DISM acima. O XML ainda deve ser validado com Windows SIM/ADK compatível com a imagem e testado no equipamento.
 
-```xml
-<!-- Copiar autounattend-fixed.xml → autounattend.xml -->
-<!-- Revisar campos obrigatórios: -->
+O resultado contém:
+
+```text
+Deploy/                         scripts, configuração e recursos
+  manifest.json                 hashes SHA256 de integridade
+  package-<id>.marker            identifica o pacote procurado pelo XML
+ventoy/
+  ventoy.json                   auto_install para uma ISO exata
+  deploy/autounattend.xml        resposta gerada
+package-info.json               índice, ISO, modo de disco e identificador
 ```
 
-| Campo | Localização | Ajuste |
-|-------|-------------|--------|
-| **Edição Windows** | `ImageInstall/OSImage/InstallFrom/MetaData[@Key="/IMAGE/INDEX"]` | 1=Home, 2=Pro, 3=Enterprise (conforme sua ISO) |
-| **Particionamento** | `DiskConfiguration/Disk/CreatePartitions` | Layout de disco esperado (EFI/MBR) |
-| **Nome/Org** | `UserData/FullName`, `Organization` | Seu nome/empresa |
-| **Linguagem** | `International-Core-WinPE` | pt-BR (ou seu idioma) |
+Copie `Deploy/` e a configuração gerada de `ventoy/` para a raiz da partição de dados do USB. Se já usa `ventoy.json`, integre a entrada `auto_install` preservando as demais configurações. A ISO deve estar no caminho exato passado em `IsoPath`. Esta versão prepara um pacote ativo por USB; não oferece payloads diferentes por ISO.
 
-### 3. Validar config.json
+Mantenha o USB conectado até terminar `specialize`. O Windows instalado procura a pasta persistente de D: a Z:, pelo identificador do pacote, e a copia para `C:\Deploy`. O manifesto detecta cópia incompleta/alteração acidental; não é uma assinatura de procedência.
+
+### Disco: seleção manual por padrão
+
+Sem opções adicionais, o XML gerado **não contém `DiskConfiguration`/`InstallTo`**. O operador escolhe o disco/partição no Setup e confirma a formatação ali. Isso evita apagar automaticamente o primeiro disco não-Ventoy.
+
+Para apagamento automático em equipamento previamente conferido, o build exige simultaneamente `-TargetDiskId <ID_CONFIRMADO_NO_WINPE>` e `-ConfirmDiskErase`. O ID deve ser o observado no ambiente de instalação da máquina alvo, nunca o ID de disco do computador que gerou o pacote. Desconecte discos extras quando possível. Conferir `list disk` não altera a seleção definida no XML.
+
+O layout automático usa GPT/UEFI, EFI 300 MB, MSR 16 MB e Windows. Não reserva partição dedicada WinRE; validar `reagentc /info` e a política de recuperação faz parte do aceite. BIOS legado requer outro layout e não é suportado por esse template.
+
+## Execução e retomadas
+
+```text
+Ventoy/Setup -> specialize copia pacote -> primeiro logon administrativo
+  Bootstrap.ps1 -> valida manifesto/parser -> Deploy.ps1
+  Start -> rede -> RenamePending -> rename confirmado -> reboot
+  AfterHostnameReboot -> aplicativos -> JoinPending -> join confirmado -> reboot
+  AfterDomainJoinReboot -> validações AD -> Completed
+```
+
+- O **primeiro** logon usa `HKLM RunOnce / DeployBootstrap`.
+- O deploy cria uma tarefa `EmpresaDeployResume`, no SID do administrador atual, com logon `Interactive` e privilégio `Highest`. Ela mantém os prompts visíveis, não roda como SYSTEM, permanece após falhas e é removida ao concluir.
+- Entre com a **mesma conta administrativa local** após cada reboot. Um usuário de domínio comum não dispara essa retomada.
+- Configuração alternativa em `-ConfigPath` é preservada; scripts continuam relativos à pasta da aplicação. No pacote gerado, a configuração selecionada no build é copiada como `Deploy/config.json`.
+- `RenamePending` e `JoinPending` podem ser repetidos/reconciliados. Cancelar uma credencial não promove a máquina a pós-AD.
+- O estado registra o boot anterior. Executar novamente antes do reboot exigido solicita esse reboot em vez de validar cedo demais.
+- `deployment.mode: silent` desativa checkpoints; **o pedido de credenciais de AD continua interativo**. Não há modo SYSTEM totalmente desatendido.
+
+### Aplicativos
+
+Exemplo de formato; substitua todos os dados pelo instalador homologado:
 
 ```json
 {
-  "empresa": { "unidade": "NP4" },                    // Código da unidade
-  "dominio": {
-    "fqdn": "gruponp.local",                          // FQDN do seu domínio AD
-    "controlador": "AD-MATRIZ-01",                    // Nome do DC
-    "credenciais": { "usuarioPadrao": "EMPRESA\\deploy.join" }
-  },
-  "aplicativos": [                                    // Instaladores opcionais
-    { "arquivo": "Aplicativo01.exe" }
-  ],
-  "rede": {
-    "interface": "Ethernet",                          // Adaptador alvo
-    "perfil8021x": "Network\\LAN.xml"                 // Perfil 802.1X (AJUSTAR)
+  "arquivo": "SetupApp.exe",
+  "argumentos": ["/quiet", "/norestart"],
+  "codigosSaidaEsperados": [0, 3010],
+  "timeoutSeconds": 1800,
+  "validacao": {
+    "tipo": "file",
+    "caminho": "C:\\Program Files\\App\\App.exe"
   }
 }
 ```
 
-### 4. Configurar Perfil 802.1X (LAN.xml)
+`argumentos: []` é aceito. Cada string representa um argumento, sem aspas externas manuais; espaços e aspas internas são escapados ao montar a linha de comando. Homologue parâmetros especiais do fornecedor. Toda a pasta `Temp` é copiada quando há aplicativos, preservando CABs/arquivos auxiliares.
 
-```bash
-# Em máquina de referência com acesso 802.1X:
-netsh lan export profile folder=C:\Export
+A retomada usa detecção e progresso por aplicativo. Um A concluído não é reinstalado quando B falha. Alterar instalador/configuração de aplicativo já registrado exige reconciliação, não atualização silenciosa. Detecção por arquivo não comprova versão/configuração; escolha um arquivo que indique conclusão real.
 
-# Copiar perfil exportado para Network/LAN.xml
-# Substituir marcador "EXPORTAR_PERFIL_REAL" no script
+Código 3010 é persistido como necessidade de reboot antes de seguir. Código 1641 não é aceito: configure o fornecedor para não iniciar o reboot por conta própria. Em timeout, o processo **não é morto**; a próxima tentativa verifica PID/hora de início para evitar uma segunda instalação concorrente. A espera acompanha o processo lançado: EXEs que iniciam filhos e saem imediatamente precisam de wrapper síncrono homologado; MSI direto não é suportado nesta versão.
+
+## Recuperar uma falha
+
+Preserve o erro e `state.json`. Corrija primeiro a causa. Para configuração/arquivos alterados, reconstrua e recopie o pacote completo, pois o manifesto rejeita alterações avulsas.
+
+Abra Windows PowerShell **como administrador** na mesma conta e execute:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Deploy\Bootstrap.ps1
 ```
 
-### 5. Testar em VM
+Se usa configuração externa, passe o mesmo `-ConfigPath`. Não apague o estado para tentar “do zero”: confira nome atual/pendente, associação ao domínio, boot e aplicativos. Estados da revisão 5 não são migrados automaticamente porque podem indicar sucesso de operações que falharam; precisam de reconciliação manual. A tarefa continua disponível após falhas posteriores ao seu registro; erros anteriores ao primeiro registro exigem a entrada manual acima.
 
-```bash
-# 1. Boot ISO (Ventoy) em VM — UEFI ou BIOS conforme Autounattend.xml
-# 2. Setup executa Autounattend.xml automaticamente
-# 3. Após 2 reboots, Deploy.ps1 dispara automaticamente
-# 4. Revisar logs:
-#    - C:\Deploy_copy_status.txt (specialize — letra do pendrive de onde copiou)
-#    - C:\Deploy_bootstrap_status.txt (specialize)
-#    - C:\ProgramData\Deploy\deploy.log (Deploy.ps1)
+| Arquivo | O que comprova |
+|---|---|
+| `C:\Deploy_copy_status.txt` | Resultado da cópia e letra da origem; não comprova execução |
+| `C:\Deploy_copy.log` | Saída/erros do xcopy |
+| `C:\Deploy_bootstrap_status.txt` | Registro inicial do gatilho; não comprova sucesso do PowerShell |
+| `C:\ProgramData\Deploy\bootstrap.log` | Transcrição do bootstrap, inclusive erros iniciais |
+| `C:\ProgramData\Deploy\deploy.log` | Eventos estruturados do deploy (caminho configurável) |
+| `C:\ProgramData\Deploy\state.json` | Etapa/progresso/identidade (caminho configurável) |
+| `C:\Windows\debug\NetSetup.log` | Diagnóstico do ingresso no domínio, inclusive restrições de reutilização de conta |
+
+Se o Setup falhar, use Shift+F10 e preserve `setupact.log`/`setuperr.log` nos caminhos existentes em `X:\Windows\Panther`, `C:\Windows\Panther` ou `C:\$WINDOWS.~BT\Sources\Panther`. Registre fase, versão do Ventoy e hash da ISO. Isole mudanças; não atribua automaticamente o erro ao Ventoy. Histórico: [ANALISE.md](ANALISE.md).
+
+## Testes e aceite
+
+```powershell
+powershell.exe -NoProfile -File .\Tests\Run-Tests.ps1
 ```
 
-### 6. Deploy em Produção
+Testes sem Pester/dependências externas: parser/BOM do 5.1, pré-requisitos, estados, reboot, configuração alternativa, isolamento da interface, ordem 802.1X/DHCP, argumentos vazios, aplicativos parciais, código 3010, timeout, manifesto e geração dos dois modos de disco. Rede, serviços, rename, tarefas, join e reboot são simulados. O teste grava apenas fixtures/resultados em pasta temporária e consulta `hostname.exe`. GitHub Actions executa a mesma suíte em Windows.
 
-```bash
-# 1. Boot USB Ventoy em máquina-alvo
-# 2. Deixar Setup executar até completar
-# 3. Após reboots, Deploy.ps1 executa automaticamente
-# 4. Ingresso no AD: inserir credenciais quando solicitado
-# 5. Mover máquina para OU final no AD (manual)
-```
+Antes de considerar a Dell pronta:
 
----
+- Validar XML no Windows SIM e instalar a ISO real, com disco alvo inequívoco.
+- Confirmar bootstrap e prompts administrativos em cada logon/reboot.
+- Confirmar rede inicial e pós-AD no switch/RADIUS real, inclusive certificados.
+- Testar falha de credencial e retomada sem avanço indevido.
+- Validar instaladores, drivers, ativação, atualizações e WinRE conforme política.
+- Confirmar domínio/canal seguro e mover a máquina para a OU final manualmente.
 
-## 📁 Estrutura
-
-```
-Deploy-Windows/
-├── Deploy.ps1                      Orquestrador principal (4 fases)
-├── config.json                     Configuração centralizada
-├── README.md                        Este arquivo
-├── ANALISE.md                       Análise técnica do erro
-├── Autounattend/
-│   ├── autounattend.xml           original (cópia do payload no pass errado — ver ANALISE.md §4 #1)
-│   └── autounattend-fixed.xml     revisão 5 (cópia no specialize + RunOnce + DiskConfiguration/ImageInstall)
-├── Scripts/
-│   ├── Computer.ps1               Identificação + rename de computador
-│   ├── Network.ps1                DHCP, 802.1X, validação de rede/DNS/DC
-│   ├── Software.ps1               Instalação de aplicativos
-│   ├── Domain.ps1                 Ingresso no AD (Add-Computer)
-│   └── Validation.ps1             Checks pré/pós-AD
-├── Network/
-│   └── LAN.xml                    Perfil 802.1X (TEMPLATE — ajustar)
-├── Temp/                          (Opcional) Instaladores e recursos
-└── VentoyPackaging/
-    └── ventoy.json                Configuração Ventoy
-```
-
----
-
-## 🔄 Fluxo de Execução
-
-### Fase 1: Identificação + Rede
-1. **windowsPE (Autounattend)**: idioma, disco, imagem, EULA
-2. **specialize (Autounattend)**: copia \Deploy do pendrive Ventoy para C:\Deploy e registra o RunOnce "DeployBootstrap" em HKLM
-3. **Próximo logon admin**: Deploy.ps1 executa
-   - Identifica serial BIOS → calcula hostname
-   - Valida adaptador Ethernet (link ativo)
-   - Configura DHCP + 802.1X
-   - Valida DNS, DC, LDAP
-   - **Reboot** (rename do computador em andamento)
-
-### Fase 2: Software + Ingresso AD
-4. **Após reboot**: Deploy.ps1 resume
-   - Valida hostname aplicado
-   - Instala aplicativos (se houver)
-   - Valida pré-AD (rede, DNS, DC)
-   - Ingressa no domínio (Add-Computer) + **Reboot**
-
-### Fase 3: Validação Pós-AD
-5. **Após reboot**: Deploy.ps1 resume
-   - Valida membro do domínio
-   - Valida Netlogon, Secure Channel
-   - **Concluído** (máquina pronta)
-
-Todas as falhas registram logs em `C:\ProgramData\Deploy\deploy.log`.
-
----
-
-## ⚙️ Configuração Avançada
-
-### Modo de Deployment
-
-```json
-"deployment": {
-  "mode": "validation",          // "validation" = pausa em checkpoints (interativo)
-  "pauseAtCheckpoints": true,    // "silent" = sem pausas (totalmente automático)
-  "stateFile": "C:\\ProgramData\\Deploy\\state.json"
-}
-```
-
-### Validações Adicionais
-
-```json
-"computador": {
-  "validarSerial": true,          // Rejeita seriais genéricos
-  "verificarDuplicidadeNoAd": false // (Futuro) verificar hostname duplicado no AD
-},
-"dominio": {
-  "validarDns": true,             // Valida resolvabilidade do FQDN
-  "validarDc": true,              // Valida conectividade ao DC
-  "validarSecureChannel": true    // Valida Secure Channel pós-AD
-}
-```
-
-### Instaladores de Aplicativos
-
-```json
-"aplicativos": [
-  {
-    "arquivo": "SetupApp.exe",
-    "argumentos": ["/quiet", "/norestart"],
-    "codigosSaidaEsperados": [0, 3010],
-    "validacao": {
-      "tipo": "file",
-      "caminho": "C:\\Program Files\\App\\app.exe"
-    }
-  }
-]
-```
-
----
-
-## 🐛 Troubleshooting
-
-### Setup falha com 0x8007000D - 0x40030 na etapa de disco
-- Atualizar Ventoy (1.1.17); família 0x400xx no 24H2 é quase sempre Ventoy antigo
-- Validar SHA256 da ISO; trocar pendrive/porta
-- `Shift+F10` → `diskpart` → `list disk`: disco ausente/dinâmico = BIOS em RAID/VMD ou disco a limpar
-- Coletar `X:\Windows\Panther\setuperr.log` antes de mexer no XML (ANALISE.md §3)
-
-### C:\Deploy_copy_status.txt diz ERRO_DEPLOY_NAO_ENCONTRADO_EM_NENHUMA_UNIDADE
-- A pasta \Deploy precisa estar na raiz da partição de dados do pendrive Ventoy
-- Pendrive foi removido antes do 1º boot do Windows instalado? Precisa ficar até o specialize terminar
-
-### Deploy.ps1 não dispara após instalação
-- Verificar C:\Deploy_bootstrap_status.txt → se houver ERRO_*, revisar condições
-- Testar logon com conta administradora local
-- Revisar que C:\Deploy\Deploy.ps1 foi copiado corretamente
-
-### Falha 802.1X — "não autenticado"
-- Validar LAN.xml tem credenciais/certificados corretos
-- Revisar que authMode/ssoMode no config.json correspondem ao perfil LAN.xml
-- Aumentar timeout em Network.ps1 (loop 12 × 5s = 60s) se switch demorar
-
-### Ingresso no AD falha — "credenciais inválidas"
-- Verificar conta deploy.join tem permissão Add-Computer no AD
-- Revisar FQDN/DC no config.json são acessíveis (nslookup/nltest)
-- Testar credencial manualmente em máquina de referência
-
-### Deploy não retoma após reboot — "estado perdido"
-- Verificar C:\ProgramData\Deploy\state.json existe e é legível
-- Revisar que tarefa agendada "DeployBootstrap" não foi removida
-- Logon com conta administradora
-
----
-
-## 📋 Checklist Pré-Produção
-
-- [ ] autounattend.xml ajustado (DiskConfiguration, ImageInstall, linguagem)
-- [ ] config.json preenchido (domínio, unidade, interfaces)
-- [ ] LAN.xml com perfil 802.1X real (não marcador EXPORTAR_PERFIL_REAL)
-- [ ] ISO Windows 11 validada (hash, não corrompida)
-- [ ] Ventoy configurado corretamente
-- [ ] Deploy-Windows/ injetado em Ventoy
-- [ ] Testado em VM (ambos BIOS e UEFI se possível)
-- [ ] Conta deploy.join criada no AD com permissões
-- [ ] Máquinas-alvo têm conectividade 802.1X validada
-
----
-
-## 🔒 Segurança
-
-- **Credenciais**: mode "prompt" (usuário insere manualmente em runtime) — nunca armazenadas em config.json
-- **Tarefa agendada**: contexto SYSTEM (elevado automaticamente)
-- **Logs**: sensíveis (contêm hostname, serial, domínio) — proteger acesso a C:\ProgramData\Deploy\
-- **Autounattend**: sensível (inclui linguagem, layout de disco) — não usar template direto em produção
-
----
-
-## 📝 Licença
-
-Seu projeto. Documentado via Deploy-Windows v1.
-
----
-
-## 📞 Suporte
-
-Veja `ANALISE.md` para detalhes técnicos de erro 0x8007000D.
-
-Dúvidas de implementação:
-1. Consultar comentários em `Deploy.ps1` (Orchestrator)
-2. Revisar scripts em `Scripts/` (cada função documentada)
-3. Testar em VM antes de produção
-
----
-
-**Versão:** 1.0 (corrigida)  
-**Última atualização:** 2026-09-14  
-**Autores:** Pedro Oliveira, Documentação/Análise
+As validações DNS/DC/canal seguro são obrigatórias; as antigas opções sem efeito foram removidas. O servidor `dominio.controlador` é usado tanto nas verificações quanto em `Add-Computer`.

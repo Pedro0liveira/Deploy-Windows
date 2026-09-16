@@ -1,42 +1,15 @@
-# Empacotamento no Ventoy
+# Empacotamento rev. 6
 
-Este pacote não altera o Ventoy nem as ISOs. Ele usa os plugins nativos **Auto Install** e **Injection**.
+O procedimento único está no [README](../README.md#preparar-um-pacote).
 
-## Preparar o payload
+Execute `Build-VentoyPayload.ps1` no Windows PowerShell 5.1, informando configuração real, saída nova fora do repositório, índice conferido via DISM e caminho exato da ISO no USB.
 
-1. Ajuste manualmente `Deploy/config.json` para o cliente/unidade do teste.
-2. Substitua `Deploy/Network/LAN.xml` pelo perfil exportado da referência. Não edite o marcador entregue como se fosse um perfil utilizável.
-3. Coloque os executáveis declarados em `config.json` dentro de `Deploy/Temp/` e defina seus argumentos e códigos de saída reais.
-4. Complete e valide `Deploy/Autounattend/autounattend.xml` em VM para a ISO escolhida. Os campos `__EDITAR_ANTES_DE_USAR__` impedem uso seguro sem esta adaptação.
-5. Compacte a pasta `Deploy` inteira, preservando-a na raiz do arquivo. Exemplo visual esperado no arquivo `deploy-payload.7z`:
+O build produz `Deploy/` descompactado, `ventoy/ventoy.json`, `ventoy/deploy/autounattend.xml` e `package-info.json`. Copie o payload para a raiz do USB e integre a entrada Ventoy gerada. Mantenha o USB conectado até acabar o pass specialize.
 
-   ```text
-   Deploy/
-     config.json
-     Deploy.ps1
-     Scripts/
-     Network/
-     Temp/
-   ```
+Não há mais `deploy-payload.7z`, plugin `injection` ou XML antigo para copiar. Uma pasta injetada em X: não persiste automaticamente no Windows instalado. O template `Autounattend/autounattend-fixed.xml` contém marcadores e só deve ser consumido pelo build.
 
-6. Copie o arquivo compactado para `/ventoy/deploy/deploy-payload.7z` e copie o autounattend ajustado para `/ventoy/deploy/autounattend.xml`.
-7. No VentoyPlugson, aplique o conteúdo de `ventoy.json` deste diretório. O arquivo final deve ficar em `/ventoy/ventoy.json` na unidade Ventoy.
+Por padrão, o disco é escolhido no Setup. Para apagamento automático, `-TargetDiskId` e `-ConfirmDiskErase` são obrigatórios em conjunto; conferir o ID no WinPE do equipamento alvo antes de iniciar. O build não consegue confirmar o disco da Dell a partir de outro computador.
 
-## ISOs por cliente/unidade
+O pacote tem um identificador para evitar selecionar uma pasta Deploy antiga em outra unidade e um manifesto SHA256 para detectar cópia incompleta. Não edite arquivos avulsos depois de gerar; reconstrua o pacote. O manifesto verifica integridade, não substitui uma assinatura de procedência.
 
-Quando uma ISO precisar de um payload próprio, troque `parent` por `image` nos dois blocos. Exemplo:
-
-```json
-{
-  "image": "/ISO/Cliente-A-Windows11.iso",
-  "archive": "/ventoy/deploy/deploy-payload-cliente-a.7z"
-}
-```
-
-Repita o mesmo `image` no bloco `auto_install`. Assim cada ISO recebe apenas seu `config.json`, instaladores e perfil compatíveis.
-
-## Reinicializações e checkpoints
-
-O orquestrador reinicia uma vez após renomear o computador e uma vez depois do Join AD. Ele registra uma retomada única em `HKLM\\...\\RunOnce`; após cada reboot, entre com um usuário local administrativo caso a ISO não possua logon automático. A retomada mantém os checkpoints visíveis no modo `validation`.
-
-O Join AD é o último passo de configuração. A verificação AD seguinte apenas confirma domínio, DC, DNS, Netlogon e Secure Channel. Mover a máquina para a OU final continua sendo uma tarefa manual.
+Leia também o [procedimento de recuperação](../README.md#recuperar-uma-falha). As retomadas exigem a mesma conta administrativa local. O build e os testes não constituem homologação da ISO, do hardware, da autenticação ou dos instaladores reais.

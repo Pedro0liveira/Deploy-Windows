@@ -1,0 +1,7 @@
+# Payloads reais podem conter perfis e instaladores privados.
+/build/
+/test-results/
+/config.local.json
+/Temp/*
+!/Temp/.gitkeep
+/Network/*.local.xml
