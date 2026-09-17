@@ -1,6 +1,67 @@
 # Análise — erro `0x8007000D - 0x40030` no Windows 11 Setup
 
-Data: 2026-09-14. Base: código do repo (commit `7b78f73`), foto da tela, documentação Microsoft/Ventoy e issues públicas (fontes no fim).
+> **Atualização rev. 6 (15/09/2026):** as seções abaixo preservam o histórico das revisões anteriores. Para preparar mídia e executar, siga exclusivamente o [README](README.md) e o [guia de empacotamento](VentoyPackaging/LEIA-ME.md). O XML antigo foi retirado do pacote; permanece no histórico Git.
+
+## Revisão completa e correções da rev. 6
+
+- Confirmado erro de parser no PowerShell 5.1/ANSI 1252 em `Deploy.ps1` UTF-8 sem BOM; scripts agora usam BOM e testes executam no 5.1.
+- Configuração/perfil/instaladores são validados antes de montar a mídia. Rede indefinida permanece um bloqueio explícito: escolher `8021x` ou rede de preparação autorizada.
+- `dot3svc` é preparado antes de autenticar; DHCP vem depois. Consulta `netsh lan show interfaces` sem parâmetro inválido, com seleção por nome/GUID e padrões pt/en.
+- Rename/join usam estados pendentes. Falhas não avançam para validação pós-reboot. Estado é gravado atomicamente, vinculado à identidade/configuração; reboot pendente é reconciliado.
+- O primeiro logon usa RunOnce para `Bootstrap.ps1`. As retomadas usam tarefa persistente criada **na sessão do administrador**, com SID desse usuário, `Interactive` e `Highest`; não SYSTEM. Removida ao concluir. `ConfigPath` é preservado.
+- Bootstrap captura falhas iniciais e mantém erro visível. Um lock impede execução concorrente do orquestrador.
+- Aplicativos sem argumentos são aceitos; detecção obrigatória, progresso persistido, timeout sem matar instalador e reboot 3010 coordenado. EXEs que iniciam filhos e saem antes deles exigem wrapper síncrono homologado.
+- Build único gera pasta `Deploy`, manifesto SHA256, identificador de pacote e configuração por ISO exata. Não usa mais injeção 7z. Maior `Path` gerado: 239 caracteres.
+- Seleção manual do disco é o padrão. Apagamento automático exige ID explícito e `-ConfirmDiskErase`; não se presume que o primeiro disco não-Ventoy seja o correto.
+- Opções sem implementação foram removidas; validações AD são obrigatórias e o DC configurado é usado no ingresso.
+
+Validação: suíte local em Windows PowerShell 5.1 com operações destrutivas simuladas, parser/BOM, geração dos modos manual/automático e manifesto. Testes de Dell/ISO, Windows SIM, logon/reboots, EAP/RADIUS e instaladores reais continuam pendentes. O incidente original `0x8007000D-0x40030` continua sem causa isolada.
+
+---
+
+Data: 2026-09-14 (atualizado 2026-09-15 com incidente real, ver §0). Base: código do repo (commit `7b78f73`), foto da tela, documentação Microsoft/Ventoy e issues públicas (fontes no fim).
+
+## 0. Atualização 2026-09-15 — causa real encontrada em campo (rev. 4) + revisão adversarial (rev. 5)
+
+A revisão 3 do `autounattend-fixed.xml` (proposta em §4/§5 abaixo) foi testada na máquina real e **quebrou de outro jeito**: tela genérica "computador foi reiniciado de forma inesperada", sem código hex. Log coletado via `Shift+F10` → `type X:\Windows\Panther\setuperr.log`:
+
+```
+[setup.exe] SMI data results dump: Source = Name: Microsoft-Windows-Deployment, ...
+  Settings/RunSynchronousCommand/[Order="1"]/Path
+[setup.exe] SMI data results dump: Description = O valor é inválido.
+  Settings/RunSynchronousCommand/[Order="2"]/Path
+[setup.exe] SMI data results dump: Description = O valor é inválido.
+[0x060565] IBS Callback_Unattend_InitEngine: The provided unattend file
+  [C:\WINDOWS\Panther\unattend.xml] is not a valid unattended Setup answer file;
+  hr = 0x1, hrResult = 0x80220005
+```
+
+**Causa:** o campo `Path` de `RunSynchronousCommand` (componente `Microsoft-Windows-Deployment`) tem **limite de 259 caracteres**. Os dois comandos da revisão 3 estouravam isso:
+
+| Comando (rev. 3) | Tamanho | Limite |
+|---|---|---|
+| Order 1 — cópia com loop `for %d in (D E F ... Z) do ...` | 359 chars | 259 |
+| Order 2 — `schtasks /create ...` com redirecionamentos embutidos | 306 chars | 259 |
+
+Com qualquer `Path` acima do limite, o Setup rejeita o `unattend.xml` **inteiro** (`hr = 0x80220005`, WMIConfig "the value is invalid") já dentro do pass `specialize` — ou seja, depois de particionar e aplicar a imagem, o que produz a tela genérica de erro fatal em vez de um erro específico do comando.
+
+**Correção (revisão 4, arquivo já atualizado):** o loop `for` foi desmembrado em **22 `RunSynchronousCommand` curtos**, um por letra de unidade candidata (`D:` a `Z:`, pulando `C:` que é sempre o destino), cada um guardado por `if not exist C:\Deploy_copy_status.txt` para não repetir trabalho após achar a certa. O comando de `schtasks` foi encurtado e separado do registro de status. Todos os 26 comandos resultantes foram validados programaticamente — o maior tem 180 caracteres, folga de ~80 contra o limite.
+
+Isso **não estava nos 10 defeitos originais listados em §4** porque a revisão 3 nunca tinha sido testada contra o limite de tamanho do schema — só contra a lógica (qual pass roda quando). Fica registrado aqui como aprendizado: **todo `Path`/`CommandLine` de unattend precisa ser medido, não só revisado visualmente.**
+
+### 0.1 Revisão adversarial (Codex `gpt-5.6-sol`, 2026-09-15) — revisão 5
+
+A revisão 4 passou por revisão adversarial independente. Cinco achados; quatro procedem e estão corrigidos na revisão 5.
+
+| # | Sev | Achado | Veredito | Correção |
+|---|---|---|---|---|
+| 1 | P1 | Aspas simples quebrariam o `/tr` do `schtasks` | **Falso positivo.** Artefato do transporte: as aspas duplas foram trocadas por simples só para passar o prompt pela linha de comando do PowerShell. O arquivo real sempre teve aspas duplas. | nenhuma |
+| 2 | P1 | A tarefa agendada roda como SYSTEM, não na sessão do usuário | **Procede, e invalida uma premissa minha.** `RunSynchronous` do `specialize` roda como SYSTEM; `schtasks` sem `/ru` herda esse principal. `Read-Host`/`Get-Credential` não têm UI ali: trava indefinidamente. | `schtasks` → `RunOnce` em HKLM |
+| 3 | P1 | `VT_WINDOWS_DISK_1ST_NONVTOY` pode apontar para o disco errado | **Procede.** A variável garante "primeiro disco que não é o Ventoy", não "o disco de sistema". Com um HD de dados presente, `WillWipeDisk=true` o apagaria. | Não é corrigível no XML: virou aviso em destaque no cabeçalho + pré-requisito operacional (conferir `list disk` ou desconectar os demais discos) |
+| 4 | P2 | `xcopy` falho ainda gravava `OK` e bloqueava as letras seguintes | **Procede.** `&` é separador incondicional. | `&` → `&&` antes do `echo OK` |
+| 5 | P2 | Letra `X:` fora da varredura | **Procede.** Ficou de fora por ser o RAM disk do WinPE, mas no `specialize` o WinPE já não existe e o volume pode receber `X:`. | `X:` incluída (27 comandos agora) |
+
+Nota de método: o sandbox do Codex bloqueia processos locais, então ele não conseguiu ler o repo nem rodar `git diff` — o XML teve que ir embutido no prompt. Um review que dependesse da leitura do disco teria voltado vazio e parecido aprovação.
 
 ## 1. O que o código diz
 
@@ -54,9 +115,9 @@ Se o setup já chegou a tocar o disco: `C:\$WINDOWS.~BT\Sources\Panther\setupact
 |---|---|---|---|---|
 | 1 | `autounattend.xml` pass `windowsPE`, `RunSynchronous` ordem 90 | Comandos `RunSynchronous` do `windowsPE` rodam **antes** do particionamento e da cópia da imagem (doc MS "How configuration passes work"). O comentário "C: deve existir após a configuração de disco" está errado. `C:\` naquele momento é o Windows antigo (que será apagado) ou não existe. | Payload nunca chega ao Windows instalado → `specialize` grava `ERRO_DEPLOY_PS1_AUSENTE` → automação morre. | Copiar no pass `specialize`, varrendo letras em busca do pendrive Ventoy (partição exFAT monta com letra no Windows instalado). Implementado em `autounattend-fixed.xml`. |
 | 2 | `VentoyPackaging/` | Só tem `ventoy.json`. Nada gera `deploy-payload.7z` nem copia `autounattend.xml` para `/ventoy/deploy/`. O `injection` extrai o 7z na raiz de `X:\`, então o 7z precisa conter a pasta `Deploy\` na raiz. | Sem empacotamento reproduzível, `X:\Deploy` pode nunca existir. | Script `Build-VentoyPayload.ps1` (a criar) que monta o 7z com `Deploy\` na raiz e copia para `<USB>:\ventoy\deploy\`. Com a correção #1 o 7z vira opcional: basta a pasta `Deploy\` na raiz do pendrive. |
-| 3 | `autounattend.xml` pass `specialize` | `schtasks /sc onlogon /rl highest` **sem `/ru SYSTEM`** roda no contexto do usuário que loga. O comentário diz "contexto SYSTEM" — não é. Se a conta não for admin, `#requires -RunAsAdministrator` derruba o script. | Deploy não inicia em máquina com conta padrão. | Ou `/ru SYSTEM` (mas veja #4), ou garantir conta local admin na imagem. |
+| 3 | `autounattend.xml` pass `specialize` | ~~`schtasks` sem `/ru SYSTEM` roda no contexto do usuário que loga~~ — **esta afirmação estava errada** (ver §0.1). `RunSynchronous` do `specialize` executa como SYSTEM, e `schtasks /create` sem `/ru` herda o principal de quem criou: SYSTEM. A tarefa rodaria sem UI e os prompts do `Deploy.ps1` travariam para sempre. | Deploy trava no primeiro logon, sem erro visível. | **Resolvido na rev. 5**: `schtasks` trocado por `RunOnce` em HKLM, que dispara na sessão interativa do primeiro usuário, com o token dele. |
 | 4 | `Deploy.ps1` + `config.json` | `mode: validation` usa `Read-Host`; `Domain.ps1` usa `Get-Credential`. Ambos exigem sessão interativa. Sob `/ru SYSTEM` não há UI → trava para sempre. | Conflito de design: tarefa em background × prompts interativos. | Decidir: (a) tarefa `onlogon` no usuário admin, interativa, mantém prompts; ou (b) SYSTEM + `mode: silent` + credencial de join vinda de cofre/LAPS. Recomendo (a) para V1. |
-| 5 | `Deploy.ps1` `Register-DeploymentResume` | Grava `RunOnce` **e** a tarefa `onlogon` continua existindo → após o reboot duas instâncias do `Deploy.ps1` sobem em paralelo e disputam `state.json`. | Estágio pode ser executado duas vezes (rename, join). | Remover a tarefa `DeployBootstrap` no primeiro run bem-sucedido (`schtasks /delete /tn DeployBootstrap /f`) e ficar só com `RunOnce`. |
+| 5 | `Deploy.ps1` `Register-DeploymentResume` | Grava `RunOnce` **e** a tarefa `onlogon` continuava existindo → após o reboot duas instâncias do `Deploy.ps1` disputavam `state.json`. | Estágio pode ser executado duas vezes (rename, join). | **Resolvido na rev. 5**: com o bootstrap também em `RunOnce`, existe um único mecanismo. `RunOnce` se autoapaga ao disparar, então não há tarefa residual (isso também resolve o #6). |
 | 6 | `Deploy.ps1` estado `Completed` | Tarefa `onlogon` nunca é removida → script roda a cada logon pra sempre (só loga). | Ruído; risco se alguém apagar `state.json`. | Mesmo fix do #5. |
 | 7 | `config.json` `aplicativos` + `Temp/` | Lista `Aplicativo01.exe`/`Aplicativo02.exe`; `Temp/` só tem `.gitkeep`. `Invoke-SoftwareStep` lança "Instalador não encontrado" na fase 2. | Deploy para depois do 1º reboot. | Lista vazia `[]` ou instaladores reais em `Temp\`. |
 | 8 | `Network/LAN.xml` | Marcador `EXPORTAR_PERFIL_REAL` → `Invoke-NetworkStep` lança de propósito. | Bloqueio intencional, mas bloqueia. | Exportar perfil da máquina de referência (comando no próprio arquivo). |

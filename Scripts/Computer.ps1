@@ -1,4 +1,4 @@
-function Get-ComputerIdentity {
+﻿function Get-ComputerIdentity {
     $serial = (Get-CimInstance -ClassName Win32_BIOS).SerialNumber
     if ($script:Config.computador.validarSerial) {
         if ([string]::IsNullOrWhiteSpace($serial)) { throw 'Serial da BIOS vazio.' }
@@ -22,8 +22,9 @@ function Set-ComputerHostname {
         Write-DeployLog -Stage 'Computer' -Operation 'Rename' -Result INFO -Message 'Hostname já aplicado.'
         return
     }
-    # Extensão V2: consultar duplicidade no AD aqui, antes de Rename-Computer/Join.
-    Rename-Computer -NewName $script:DeployContext.TargetHostname -Force
+    $system = Get-CimInstance Win32_ComputerSystem
+    if ($system.PartOfDomain) { throw 'Rename de computador já no domínio exige reconciliação manual.' }
+    Rename-Computer -NewName $script:DeployContext.TargetHostname -Force -ErrorAction Stop
     Write-DeployLog -Stage 'Computer' -Operation 'Rename' -Result SUCCESS -Message "Hostname pendente de reinicialização: $($script:DeployContext.TargetHostname)"
 }
 

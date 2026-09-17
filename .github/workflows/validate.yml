@@ -1,0 +1,15 @@
+name: Validate deployment
+on:
+  pull_request:
+  push:
+    branches: [master, fix/error-0x8007000d]
+permissions:
+  contents: read
+jobs:
+  powershell-51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Parser, package and simulated deployment regressions
+        shell: powershell
+        run: ./Tests/Run-Tests.ps1
